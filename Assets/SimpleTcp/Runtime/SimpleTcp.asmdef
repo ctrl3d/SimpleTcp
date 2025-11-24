@@ -1,0 +1,22 @@
+{
+    "name": "SimpleTcp",
+    "rootNamespace": "work.ctrl3d",
+    "references": [
+        "GUID:88be65f96b86746888c927a5c8ff3534"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.annulusgames.alchemy",
+            "expression": "",
+            "define": "USE_ALCHEMY"
+        }
+    ],
+    "noEngineReferences": false
+}
