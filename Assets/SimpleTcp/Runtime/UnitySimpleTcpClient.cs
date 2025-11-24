@@ -22,6 +22,11 @@ namespace work.ctrl3d
         [SerializeField] private float reconnectInterval = 3f;
         [SerializeField] private int maxReconnectAttempts = -1;
 
+        public event Action OnConnected;
+        public event Action OnDisconnected;
+        public event Action<string> OnMessageReceived;
+        public event Action<int> OnReconnectAttempt;
+        
         [Header("Events")] 
         public UnityEvent onConnected;
         public UnityEvent onDisconnected;
@@ -155,6 +160,7 @@ namespace work.ctrl3d
                         Debug.Log($"[SimpleClient] Reconnecting... Attempt {attemptInfo}");
                     }
 
+                    OnReconnectAttempt?.Invoke(_reconnectAttempts);
                     onReconnectAttempt?.Invoke(_reconnectAttempts);
                 });
 
@@ -185,7 +191,11 @@ namespace work.ctrl3d
 
         private void HandleConnected()
         {
-            _mainThreadQueue.Enqueue(() => onConnected?.Invoke());
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnConnected?.Invoke();
+                onConnected?.Invoke();
+            });
         }
 
         private void HandleConnectionFailed()
@@ -206,13 +216,18 @@ namespace work.ctrl3d
                 _mainThreadQueue.Enqueue(() => Debug.Log($"{name} : {message}"));
             }
 
-            _mainThreadQueue.Enqueue(() => onMessageReceived?.Invoke(message));
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnMessageReceived?.Invoke(message);
+                onMessageReceived?.Invoke(message);
+            });
         }
 
         private void HandleDisconnected()
         {
             _mainThreadQueue.Enqueue(() =>
             {
+                OnDisconnected?.Invoke();
                 onDisconnected?.Invoke();
 
                 // 연결이 끊어졌을 때 자동 재접속 시작

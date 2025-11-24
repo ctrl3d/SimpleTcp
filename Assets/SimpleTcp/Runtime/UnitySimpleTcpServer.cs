@@ -16,6 +16,10 @@ namespace work.ctrl3d
         [SerializeField] private bool autoStart = true;
         [SerializeField] private bool showLogs = true;
 
+        public event Action<int> OnClientConnected;
+        public event Action<int> OnClientDisconnected;
+        public event Action<int, string> OnMessageReceived;
+        
         [Header("Events")] 
         public UnityEvent<int> onClientConnected;
         public UnityEvent<int> onClientDisconnected;
@@ -102,12 +106,20 @@ namespace work.ctrl3d
 
         private void HandleClientConnected(int id)
         {
-            _mainThreadQueue.Enqueue(() => onClientConnected?.Invoke(id));
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnClientConnected?.Invoke(id);
+                onClientConnected?.Invoke(id);
+            });
         }
 
         private void HandleClientDisconnected(int id)
         {
-            _mainThreadQueue.Enqueue(() => onClientDisconnected?.Invoke(id));
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnClientDisconnected?.Invoke(id);
+                onClientDisconnected?.Invoke(id);
+            });
         }
 
         private void HandleMessageReceived(int id, string msg)
@@ -117,7 +129,11 @@ namespace work.ctrl3d
                 _mainThreadQueue.Enqueue(() => Debug.Log($"{name} From({id}): {msg}"));
             }
 
-            _mainThreadQueue.Enqueue(() => onMessageReceived?.Invoke(id, msg));
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnMessageReceived?.Invoke(id, msg);
+                onMessageReceived?.Invoke(id, msg);
+            });
         }
 
         #endregion

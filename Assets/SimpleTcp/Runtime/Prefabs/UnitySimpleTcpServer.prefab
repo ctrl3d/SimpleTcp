@@ -46,7 +46,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   port: 7777
   autoStart: 1
-  showDebugLogs: 1
+  showLogs: 1
   onClientConnected:
     m_PersistentCalls:
       m_Calls: []
