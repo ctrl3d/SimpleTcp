@@ -12,8 +12,8 @@ namespace work.ctrl3d
     {
         [field: Header("Server Settings")]
         [field: SerializeField]
-        
         public string IpAddress { get; set; } = "127.0.0.1";
+        [field: SerializeField]
         public int Port { get; set; } = 7777;
 
         [SerializeField] private bool autoStart = true;
