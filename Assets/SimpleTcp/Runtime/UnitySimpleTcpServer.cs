@@ -10,8 +10,11 @@ namespace work.ctrl3d
 {
     public class UnitySimpleTcpServer : MonoBehaviour
     {
-        [Header("Server Settings")] 
-        [SerializeField] private int port = 7777;
+        [field: Header("Server Settings")]
+        [field: SerializeField]
+        
+        public string IpAddress { get; set; } = "127.0.0.1";
+        public int Port { get; set; } = 7777;
 
         [SerializeField] private bool autoStart = true;
         [SerializeField] private bool showLogs = true;
@@ -19,9 +22,8 @@ namespace work.ctrl3d
         public event Action<int> OnClientConnected;
         public event Action<int> OnClientDisconnected;
         public event Action<int, string> OnMessageReceived;
-        
-        [Header("Events")] 
-        public UnityEvent<int> onClientConnected;
+
+        [Header("Events")] public UnityEvent<int> onClientConnected;
         public UnityEvent<int> onClientDisconnected;
         public UnityEvent<int, string> onMessageReceived;
 
@@ -75,7 +77,7 @@ namespace work.ctrl3d
 #if USE_ALCHEMY
         [Button, HorizontalGroup("Control")]
 #endif
-        public void StartServer() => _server?.Start(port);
+        public void StartServer() => _server?.Start(IpAddress, Port);
 
 #if USE_ALCHEMY
         [Button, HorizontalGroup("Control")]

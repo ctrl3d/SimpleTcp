@@ -23,12 +23,15 @@ namespace work.ctrl3d
         public event Action<int> OnClientConnected;
         public event Action<int> OnClientDisconnected;
 
-        public void Start(int port)
+        public void Start(string ip, int port)
         {
             if (_listener != null) return;
 
             _cts = new CancellationTokenSource();
-            _listener = new TcpListener(IPAddress.Any, port);
+            _listener = ip != "0.0.0.0"
+                ? new TcpListener(IPAddress.Parse(ip), port)
+                : new TcpListener(IPAddress.Any, port);
+
             _listener.Start();
 
             OnLog?.Invoke($"Server started (Port: {port})");
