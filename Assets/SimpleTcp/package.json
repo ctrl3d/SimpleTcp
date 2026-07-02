@@ -1,8 +1,8 @@
 ﻿{
   "name": "work.ctrl3d.simple-tcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "SimpleTcp",
-  "description": "",
+  "description": "Length-prefixed TCP messaging for Unity.",
   "unity": "2022.1",
   "documentationUrl": "https://ctrl3d.github.io/SimpleTcp",
   "changelogUrl": "https://github.com/ctrl3d/SimpleTcp/blob/main/CHANGELOG.md",

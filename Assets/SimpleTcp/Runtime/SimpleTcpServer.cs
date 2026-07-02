@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -15,13 +15,16 @@ namespace work.ctrl3d
         private TcpListener _listener;
         private CancellationTokenSource _cts;
 
-        private readonly ConcurrentDictionary<int, StreamWriter> _clients = new();
+        private readonly ConcurrentDictionary<int, ClientConnection> _clients = new();
         private int _nextClientId;
 
         public event Action<string> OnLog;
         public event Action<int, string> OnMessageReceived;
+        public event Action<int, byte[]> OnBytesReceived;
         public event Action<int> OnClientConnected;
         public event Action<int> OnClientDisconnected;
+
+        public int MaxMessageSize { get; set; } = SimpleTcpProtocol.DefaultMaxMessageSize;
 
         public void Start(string ip, int port)
         {
@@ -51,9 +54,12 @@ namespace work.ctrl3d
 
                     _ = HandleClientAsync(id, tcpClient, token);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    /* 서버 종료 시 발생 가능 */
+                    if (!token.IsCancellationRequested)
+                    {
+                        OnLog?.Invoke($"Accept client failed: {ex.Message}");
+                    }
                 }
             }
         }
@@ -63,24 +69,33 @@ namespace work.ctrl3d
             OnClientConnected?.Invoke(id);
             OnLog?.Invoke($"Client connected: {id}");
 
-            using (client)
-            await using (var networkStream = client.GetStream())
-            await using (var writer = new StreamWriter(networkStream))
-            {
-                writer.AutoFlush = true;
-                _clients.TryAdd(id, writer);
+            ClientConnection connection = null;
 
-                var buffer = new byte[1024];
+            using (client)
+            using (var networkStream = client.GetStream())
+            {
+                connection = new ClientConnection(client, networkStream);
+                _clients.TryAdd(id, connection);
 
                 try
                 {
                     while (!token.IsCancellationRequested && client.Connected)
                     {
-                        var bytesRead = await networkStream.ReadAsync(buffer, 0, buffer.Length, token);
-                        if (bytesRead == 0) break; // Disconnected
+                        var frame = await SimpleTcpProtocol.ReadFrameAsync(networkStream, MaxMessageSize, token);
+                        if (frame == null) break; // Disconnected
 
-                        var message = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        OnMessageReceived?.Invoke(id, message);
+                        switch (frame.Type)
+                        {
+                            case SimpleTcpFrameType.String:
+                                var message = Encoding.UTF8.GetString(frame.Payload, 0, frame.Payload.Length);
+                                OnMessageReceived?.Invoke(id, message);
+                                break;
+                            case SimpleTcpFrameType.Bytes:
+                                OnBytesReceived?.Invoke(id, frame.Payload);
+                                break;
+                            default:
+                                throw new InvalidDataException($"Unknown frame type: {(byte)frame.Type}");
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -93,7 +108,15 @@ namespace work.ctrl3d
                 }
                 finally
                 {
-                    _clients.TryRemove(id, out _);
+                    if (_clients.TryRemove(id, out var removedConnection))
+                    {
+                        removedConnection.Dispose();
+                    }
+                    else
+                    {
+                        connection?.Dispose();
+                    }
+
                     OnClientDisconnected?.Invoke(id);
                     OnLog?.Invoke($"Client disconnected: {id}");
                 }
@@ -102,17 +125,51 @@ namespace work.ctrl3d
 
         public async void SendToClient(int clientId, string message)
         {
-            if (_clients.TryGetValue(clientId, out var writer))
+            await SendToClientAsync(clientId, message);
+        }
+
+        public Task SendToClientAsync(int clientId, string message)
+        {
+            var payload = Encoding.UTF8.GetBytes(message ?? string.Empty);
+            return SendFrameToClientAsync(clientId, SimpleTcpFrameType.String, payload);
+        }
+
+        public async void SendBytesToClient(int clientId, byte[] bytes)
+        {
+            await SendBytesToClientAsync(clientId, bytes);
+        }
+
+        public Task SendBytesToClientAsync(int clientId, byte[] bytes)
+        {
+            return SendFrameToClientAsync(clientId, SimpleTcpFrameType.Bytes, bytes ?? Array.Empty<byte>());
+        }
+
+        public async void Broadcast(string message)
+        {
+            await BroadcastAsync(message);
+        }
+
+        public Task BroadcastAsync(string message)
+        {
+            var payload = Encoding.UTF8.GetBytes(message ?? string.Empty);
+            return BroadcastFrameAsync(SimpleTcpFrameType.String, payload);
+        }
+
+        public async void BroadcastBytes(byte[] bytes)
+        {
+            await BroadcastBytesAsync(bytes);
+        }
+
+        public Task BroadcastBytesAsync(byte[] bytes)
+        {
+            return BroadcastFrameAsync(SimpleTcpFrameType.Bytes, bytes ?? Array.Empty<byte>());
+        }
+
+        private async Task SendFrameToClientAsync(int clientId, SimpleTcpFrameType frameType, byte[] payload)
+        {
+            if (_clients.TryGetValue(clientId, out var connection))
             {
-                try
-                {
-                    await writer.WriteAsync(message);
-                    //await writer.WriteLineAsync(message);
-                }
-                catch (Exception ex)
-                {
-                    OnLog?.Invoke($"Failed to send to client {clientId}: {ex.Message}");
-                }
+                await SendFrameToClientAsync(clientId, connection, frameType, payload);
             }
             else
             {
@@ -120,25 +177,35 @@ namespace work.ctrl3d
             }
         }
 
-        public async void Broadcast(string message)
+        private async Task SendFrameToClientAsync(
+            int clientId,
+            ClientConnection connection,
+            SimpleTcpFrameType frameType,
+            byte[] payload)
+        {
+            try
+            {
+                await SimpleTcpProtocol.WriteFrameAsync(
+                    connection.Stream,
+                    connection.SendLock,
+                    frameType,
+                    payload,
+                    MaxMessageSize,
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                OnLog?.Invoke($"Failed to send to client {clientId}: {ex.Message}");
+            }
+        }
+
+        private async Task BroadcastFrameAsync(SimpleTcpFrameType frameType, byte[] payload)
         {
             var tasks = new List<Task>();
 
-            foreach (var writer in _clients.Values)
+            foreach (var pair in _clients)
             {
-                var currentWriter = writer;
-                tasks.Add(Task.Run(async () =>
-                {
-                    try
-                    {
-                        await currentWriter.WriteAsync(message);
-                        //await currentWriter.WriteLineAsync(message);
-                    }
-                    catch
-                    {
-                        /* Ignore send failure */
-                    }
-                }));
+                tasks.Add(SendFrameToClientAsync(pair.Key, pair.Value, frameType, payload));
             }
 
             await Task.WhenAll(tasks);
@@ -147,7 +214,33 @@ namespace work.ctrl3d
         public void Stop()
         {
             _cts?.Cancel();
-            _listener?.Stop();
+
+            var listener = _listener;
+            _listener = null;
+
+            try
+            {
+                listener?.Stop();
+            }
+            catch
+            {
+                // Ignore errors during cleanup
+            }
+
+            foreach (var connection in _clients.Values)
+            {
+                try
+                {
+                    connection.Client.Close();
+                }
+                catch
+                {
+                    // Ignore errors during cleanup
+                }
+
+                connection.Dispose();
+            }
+
             _clients.Clear();
             OnLog?.Invoke("Server stopped");
         }
@@ -156,6 +249,32 @@ namespace work.ctrl3d
         {
             Stop();
             _cts?.Dispose();
+            _cts = null;
+        }
+
+        private sealed class ClientConnection : IDisposable
+        {
+            private int _disposed;
+
+            public ClientConnection(TcpClient client, NetworkStream stream)
+            {
+                Client = client;
+                Stream = stream;
+            }
+
+            public TcpClient Client { get; }
+            public NetworkStream Stream { get; }
+            public SemaphoreSlim SendLock { get; } = new(1, 1);
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 1)
+                {
+                    return;
+                }
+
+                SendLock.Dispose();
+            }
         }
     }
 }

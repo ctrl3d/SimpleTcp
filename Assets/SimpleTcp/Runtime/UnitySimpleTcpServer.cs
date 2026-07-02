@@ -10,6 +10,8 @@ namespace work.ctrl3d
 {
     public class UnitySimpleTcpServer : MonoBehaviour
     {
+        private const int MaxLoggedMessageLength = 512;
+
         [field: Header("Server Settings")]
         [field: SerializeField]
         public string IpAddress { get; set; } = "127.0.0.1";
@@ -18,14 +20,17 @@ namespace work.ctrl3d
 
         [SerializeField] private bool autoStart = true;
         [SerializeField] private bool showLogs = true;
+        [SerializeField] private SimpleTcpMessageSize maxMessageSize = SimpleTcpMessageSize.MiB32;
 
         public event Action<int> OnClientConnected;
         public event Action<int> OnClientDisconnected;
         public event Action<int, string> OnMessageReceived;
+        public event Action<int, byte[]> OnBytesReceived;
 
         [Header("Events")] public UnityEvent<int> onClientConnected;
         public UnityEvent<int> onClientDisconnected;
         public UnityEvent<int, string> onMessageReceived;
+        public UnityEvent<int, byte[]> onBytesReceived;
 
         private SimpleTcpServer _server;
         private readonly ConcurrentQueue<Action> _mainThreadQueue = new();
@@ -34,12 +39,13 @@ namespace work.ctrl3d
 
         private void Awake()
         {
-            _server = new SimpleTcpServer();
+            _server = new SimpleTcpServer { MaxMessageSize = (int)maxMessageSize };
 
             _server.OnLog += HandleLog;
             _server.OnClientConnected += HandleClientConnected;
             _server.OnClientDisconnected += HandleClientDisconnected;
             _server.OnMessageReceived += HandleMessageReceived;
+            _server.OnBytesReceived += HandleBytesReceived;
         }
 
         private void Start()
@@ -65,6 +71,7 @@ namespace work.ctrl3d
             _server.OnClientConnected -= HandleClientConnected;
             _server.OnClientDisconnected -= HandleClientDisconnected;
             _server.OnMessageReceived -= HandleMessageReceived;
+            _server.OnBytesReceived -= HandleBytesReceived;
 
             _server.Dispose();
             _server = null;
@@ -77,7 +84,15 @@ namespace work.ctrl3d
 #if USE_ALCHEMY
         [Button, HorizontalGroup("Control")]
 #endif
-        public void StartServer() => _server?.Start(IpAddress, Port);
+        public void StartServer()
+        {
+            if (_server != null)
+            {
+                _server.MaxMessageSize = (int)maxMessageSize;
+            }
+
+            _server?.Start(IpAddress, Port);
+        }
 
 #if USE_ALCHEMY
         [Button, HorizontalGroup("Control")]
@@ -89,10 +104,14 @@ namespace work.ctrl3d
 #endif
         public void SendToClient(int clientId, string message) => _server?.SendToClient(clientId, message);
 
+        public void SendBytesToClient(int clientId, byte[] bytes) => _server?.SendBytesToClient(clientId, bytes);
+
 #if USE_ALCHEMY
         [Button]
 #endif
         public void Broadcast(string message) => _server?.Broadcast(message);
+
+        public void BroadcastBytes(byte[] bytes) => _server?.BroadcastBytes(bytes);
 
         #endregion
 
@@ -128,7 +147,7 @@ namespace work.ctrl3d
         {
             if (showLogs)
             {
-                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} From({id}): {msg}"));
+                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} From({id}): {FormatMessageForLog(msg)}"));
             }
 
             _mainThreadQueue.Enqueue(() =>
@@ -138,6 +157,31 @@ namespace work.ctrl3d
             });
         }
 
+        private void HandleBytesReceived(int id, byte[] bytes)
+        {
+            if (showLogs)
+            {
+                var length = bytes?.Length ?? 0;
+                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} From({id}): {length} bytes"));
+            }
+
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnBytesReceived?.Invoke(id, bytes);
+                onBytesReceived?.Invoke(id, bytes);
+            });
+        }
+
         #endregion
+
+        private static string FormatMessageForLog(string message)
+        {
+            if (string.IsNullOrEmpty(message) || message.Length <= MaxLoggedMessageLength)
+            {
+                return message;
+            }
+
+            return $"{message.Substring(0, MaxLoggedMessageLength)}... ({message.Length} chars)";
+        }
     }
 }

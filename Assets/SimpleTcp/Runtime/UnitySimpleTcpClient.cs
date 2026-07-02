@@ -11,11 +11,14 @@ namespace work.ctrl3d
 {
     public class UnitySimpleTcpClient : MonoBehaviour
     {
+        private const int MaxLoggedMessageLength = 512;
+
         [Header("Client Settings")] 
         [SerializeField] private string ipAddress = "127.0.0.1";
         [SerializeField] private int port = 7777;
         [SerializeField] private bool connectOnStart = true;
         [SerializeField] private bool showLogs = true;
+        [SerializeField] private SimpleTcpMessageSize maxMessageSize = SimpleTcpMessageSize.MiB32;
 
         [Header("Reconnection Settings")] 
         [SerializeField] private bool autoReconnect = true;
@@ -25,12 +28,14 @@ namespace work.ctrl3d
         public event Action OnConnected;
         public event Action OnDisconnected;
         public event Action<string> OnMessageReceived;
+        public event Action<byte[]> OnBytesReceived;
         public event Action<int> OnReconnectAttempt;
         
         [Header("Events")] 
         public UnityEvent onConnected;
         public UnityEvent onDisconnected;
         public UnityEvent<string> onMessageReceived;
+        public UnityEvent<byte[]> onBytesReceived;
         public UnityEvent<int> onReconnectAttempt;
 
         private SimpleTcpClient _client;
@@ -49,13 +54,14 @@ namespace work.ctrl3d
 
         private void InitializeClient()
         {
-            _client = new SimpleTcpClient();
+            _client = new SimpleTcpClient { MaxMessageSize = (int)maxMessageSize };
 
             // 이벤트 구독
             _client.OnLog += HandleLog;
             _client.OnConnected += HandleConnected;
             _client.OnConnectionFailed += HandleConnectionFailed;
             _client.OnMessageReceived += HandleMessageReceived;
+            _client.OnBytesReceived += HandleBytesReceived;
             _client.OnDisconnected += HandleDisconnected;
         }
 
@@ -83,6 +89,7 @@ namespace work.ctrl3d
             _client.OnConnected -= HandleConnected;
             _client.OnConnectionFailed -= HandleConnectionFailed;
             _client.OnMessageReceived -= HandleMessageReceived;
+            _client.OnBytesReceived -= HandleBytesReceived;
             _client.OnDisconnected -= HandleDisconnected;
 
             _client.Dispose();
@@ -98,6 +105,11 @@ namespace work.ctrl3d
 #endif
         public void Connect()
         {
+            if (_client != null)
+            {
+                _client.MaxMessageSize = (int)maxMessageSize;
+            }
+
             _client?.Connect(ipAddress, port);
         }
 #if USE_ALCHEMY
@@ -213,13 +225,28 @@ namespace work.ctrl3d
         {
             if (showLogs)
             {
-                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} : {message}"));
+                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} : {FormatMessageForLog(message)}"));
             }
 
             _mainThreadQueue.Enqueue(() =>
             {
                 OnMessageReceived?.Invoke(message);
                 onMessageReceived?.Invoke(message);
+            });
+        }
+
+        private void HandleBytesReceived(byte[] bytes)
+        {
+            if (showLogs)
+            {
+                var length = bytes?.Length ?? 0;
+                _mainThreadQueue.Enqueue(() => Debug.Log($"{name} : {length} bytes"));
+            }
+
+            _mainThreadQueue.Enqueue(() =>
+            {
+                OnBytesReceived?.Invoke(bytes);
+                onBytesReceived?.Invoke(bytes);
             });
         }
 
@@ -239,5 +266,15 @@ namespace work.ctrl3d
         }
 
         #endregion
+
+        private static string FormatMessageForLog(string message)
+        {
+            if (string.IsNullOrEmpty(message) || message.Length <= MaxLoggedMessageLength)
+            {
+                return message;
+            }
+
+            return $"{message.Substring(0, MaxLoggedMessageLength)}... ({message.Length} chars)";
+        }
     }
 }
