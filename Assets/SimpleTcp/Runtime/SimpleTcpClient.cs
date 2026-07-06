@@ -10,9 +10,13 @@ namespace work.ctrl3d
 {
     public class SimpleTcpClient : IDisposable
     {
+        private readonly object _stateLock = new();
         private readonly SemaphoreSlim _sendLock = new(1, 1);
         private TcpClient _client;
+        private TcpClient _connectingClient;
         private CancellationTokenSource _cts;
+        private bool _isConnecting;
+        private int _connectionVersion;
 
         public event Action<string> OnLog;
         public event Action OnConnected;
@@ -27,36 +31,107 @@ namespace work.ctrl3d
 
         public void Connect(string ip, int port)
         {
+            _ = ConnectAsync(ip, port);
+        }
+
+        public async Task ConnectAsync(string ip, int port)
+        {
             if (IsConnected) return;
+
+            TcpClient connectingClient = null;
+            int connectionVersion;
 
             try
             {
-                _client = new TcpClient();
-                _client.NoDelay = true;
-                _client.Connect(ip, port);
+                connectingClient = new TcpClient { NoDelay = true };
 
-                _cts = new CancellationTokenSource();
+                lock (_stateLock)
+                {
+                    if (IsConnected || _isConnecting)
+                    {
+                        connectingClient.Close();
+                        return;
+                    }
+
+                    _isConnecting = true;
+                    _connectingClient = connectingClient;
+                    connectionVersion = _connectionVersion;
+                }
+
+                await connectingClient.ConnectAsync(ip, port).ConfigureAwait(false);
+
+                CancellationTokenSource receiveCts;
+                lock (_stateLock)
+                {
+                    if (connectionVersion != _connectionVersion || _connectingClient != connectingClient)
+                    {
+                        connectingClient.Close();
+                        return;
+                    }
+
+                    _connectingClient = null;
+                    _isConnecting = false;
+                    _client = connectingClient;
+                    _cts?.Dispose();
+                    _cts = new CancellationTokenSource();
+                    receiveCts = _cts;
+                    connectingClient = null;
+                }
 
                 OnLog?.Invoke($"Connected to server ({ip}:{port})");
                 OnConnected?.Invoke();
 
-                Task.Run(() => ReceiveLoop(_cts.Token));
+                _ = Task.Run(() => ReceiveLoop(receiveCts.Token));
             }
             catch (Exception e)
             {
-                OnLog?.Invoke($"Connection failed: {e.Message}");
-                OnConnectionFailed?.Invoke();
-                Disconnect();
+                var isCurrentAttempt = false;
+                lock (_stateLock)
+                {
+                    isCurrentAttempt = _connectingClient == connectingClient;
+                }
+
+                if (isCurrentAttempt)
+                {
+                    OnLog?.Invoke($"Connection failed: {e.Message}");
+                    OnConnectionFailed?.Invoke();
+                }
+            }
+            finally
+            {
+                if (connectingClient != null)
+                {
+                    try
+                    {
+                        connectingClient.Close();
+                    }
+                    catch
+                    {
+                        // Ignore errors during cleanup
+                    }
+                }
+
+                lock (_stateLock)
+                {
+                    if (_connectingClient == connectingClient)
+                    {
+                        _connectingClient = null;
+                        _isConnecting = false;
+                    }
+                }
             }
         }
 
         private async Task ReceiveLoop(CancellationToken token)
         {
-            var stream = _client.GetStream();
+            var client = _client;
+            if (client == null) return;
+
+            var stream = client.GetStream();
 
             try
             {
-                while (!token.IsCancellationRequested && IsConnected)
+                while (!token.IsCancellationRequested && client.Connected)
                 {
                     var frame = await SimpleTcpProtocol.ReadFrameAsync(stream, MaxMessageSize, token);
                     if (frame == null) break; // Server closed connection
@@ -112,7 +187,12 @@ namespace work.ctrl3d
 
         private async Task SendFrameAsync(SimpleTcpFrameType frameType, byte[] payload)
         {
-            var client = _client;
+            TcpClient client;
+            lock (_stateLock)
+            {
+                client = _client;
+            }
+
             if (client == null || !client.Connected) return;
 
             try
@@ -134,11 +214,41 @@ namespace work.ctrl3d
 
         public void Disconnect()
         {
-            var client = _client;
-            if (client == null) return;
+            TcpClient client;
+            TcpClient connectingClient;
+            CancellationTokenSource cts;
 
-            _client = null;
-            _cts?.Cancel();
+            lock (_stateLock)
+            {
+                _connectionVersion++;
+                _isConnecting = false;
+
+                connectingClient = _connectingClient;
+                _connectingClient = null;
+
+                client = _client;
+                _client = null;
+
+                cts = _cts;
+                _cts = null;
+            }
+
+            cts?.Cancel();
+
+            try
+            {
+                connectingClient?.Close();
+            }
+            catch
+            {
+                // Ignore errors during cleanup
+            }
+
+            if (client == null)
+            {
+                cts?.Dispose();
+                return;
+            }
 
             try
             {
@@ -151,13 +261,13 @@ namespace work.ctrl3d
 
             OnDisconnected?.Invoke();
             OnLog?.Invoke("Disconnected");
+
+            cts?.Dispose();
         }
 
         public void Dispose()
         {
             Disconnect();
-            _cts?.Dispose();
-            _cts = null;
             _sendLock.Dispose();
         }
     }

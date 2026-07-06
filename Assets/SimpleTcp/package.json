@@ -1,6 +1,6 @@
 ﻿{
   "name": "work.ctrl3d.simple-tcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "displayName": "SimpleTcp",
   "description": "Length-prefixed TCP messaging for Unity.",
   "unity": "2022.1",

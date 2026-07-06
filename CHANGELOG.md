@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 - 2026-07-05
+
+### 변경
+
+- `SimpleTcpClient.Connect`가 호출 스레드를 블로킹하지 않도록 `ConnectAsync` 기반으로 변경했습니다.
+- `SimpleTcpClient.ConnectAsync` API를 추가했습니다.
+- 연결 중복 시도, 연결 중 `Disconnect`, 자동 재연결 중 상태 경합 처리를 보강했습니다.
+- `UnitySimpleTcpClient`의 시작 연결과 자동 재연결이 동기 TCP 연결로 Unity 메인 스레드를 막지 않도록 했습니다.
+
+### 주의
+
+- `Connect()`는 연결 완료를 기다리지 않고 즉시 반환합니다. 연결 직후 송신해야 하는 코드는 `ConnectAsync()`를 `await`하거나 `OnConnected` 이후 송신해야 합니다.
+
 ## 0.2.0 - 2026-07-02
 
 ### 변경
